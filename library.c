@@ -6,28 +6,30 @@
 
 // Normally I'd write a test suite for this, but I don't know how in C, let alone the countless other syntax errors that are here.
 
-// TODO: Make Upper Order memory in split be the active memory so you dont have to update the free list
-// TODO: Move HeapHeader to BSS, (makes program efficient, increases usable page size, makes less likely to be trashed by user (more robust))
+// Done: Make Upper Order memory in split be the active memory so you don't have to update the free list
+// DONE: Move HeapHeader to BSS, (makes program efficient, increases usable page size, makes less likely to be trashed by user (more robust))
 
 // Since we are writing a memory management package should all of these definition be within the heap-header or at least the variables?
 // Or should we let this stuff exist in the BSS instead?
-
+typedef struct ListNode ListNode;
 struct ListNode {
-    struct HeapHeader *header;
-    struct ListNode *next;
-    struct ListNode *prev;
+    ListNode *next;
+    ListNode *prev;
 };
 
+typedef struct HeapHeader HeapHeader;
 struct HeapHeader {
-    struct ListNode *head;
-    struct ListNode *tail;
+    ListNode *head;
+    ListNode *tail;
 };
 
+typedef struct TwoAddresses TwoAddresses;
 struct TwoAddresses {
-    int *a;
-    int *b;
+    void *a;
+    void *b;
 };
 
+typedef struct BlockInfo BlockInfo;
 struct BlockInfo {
     int *start;
     int *end;
@@ -42,9 +44,10 @@ enum Flags {
 
 const int word_size = sizeof(void*);
 const int minimum_alloc = word_size * 3;
-const int starting_place = 0;
+HeapHeader heap_header = (struct HeapHeader){.head = 0, .tail = 0};
 const int max = 4096;
 const int minimum_valid_block_size = word_size * 5;
+const void *init_start_of_user_memory = (char *)0 + word_size;
 
 //endregion
 
@@ -69,48 +72,49 @@ void writeFlag(int *addressValue, const int flag) {
 
 
 // region Free List Manipulation
-void addBlockToFreeList(int addressOfUsuableMemoryInNewFreeBlock) {
+void addBlockToFreeList(void *addressOfUsableMemoryInNewFreeBlock) {
     // Update the tail at the head
     // Use the previous tail to define the previous node
 
     // Create an address which is the address of the previous tail
-    int previousLastNode = *starting_place.tail;
+    ListNode *previousLastNode = heap_header.tail;
     // Create a ListNode at the address of the usable memory in the last free block
-    *addressOfUsuableMemoryInLastFreeBlock = (struct ListNode){*starting_place, 0, previousLastNode};
+    // addressOfUsableMemoryInNewFreeBlock = (ListNode){0, previousLastNode};
+    *(ListNode *)addressOfUsableMemoryInNewFreeBlock = (ListNode){0, previousLastNode};
     // Assign the tail for the value stored at the starting_place (the HeapHeader) to be the address of the last free block
-    *starting_place.tail = addressOfUsuableMemoryInLastFreeBlock;
+    heap_header.tail = addressOfUsableMemoryInNewFreeBlock;
 }
 
-void removeBlockFromFreeList(struct ListNode blockToRemove) {
+void removeBlockFromFreeList(ListNode *blockToRemove) {
     // If it is the head we must update the head
     // If it is the tail we must update the tail
     // If it is in the middle we need to update the prev and next references to each other
-    if (blockToRemove.prev == 0) {
-        *starting_place.head = blockToRemove.next;
+    if (blockToRemove->prev == 0) {
+        heap_header.head = blockToRemove->next;
     }
-    if (blockToRemove.next == 0) {
-        *starting_place.tail = blockToRemove.prev;
+    if (blockToRemove->next == 0) {
+        heap_header.tail = blockToRemove->prev;
     }
     // The previous Node needs to point to the next node
-    *blockToRemove.prev->next = *blockToRemove.next;
+    *blockToRemove->prev->next = *blockToRemove->next;
     // The next node needs to trail back to the previous node
-    *blockToRemove.next->prev = *blockToRemove.prev;
+    *blockToRemove->next->prev = *blockToRemove->prev;
 
     // This is how you reset a range of memory apparently in C, however I couldn't find a function definition
     // For apparently being a low level language not much you can do by hand, I feel like I still have to rely on
     // wierd APIs which is what I was trying to escape
-    memset(&blockToRemove, 0, sizeof(blockToRemove));
+    memset(blockToRemove, 0, sizeof(*blockToRemove));
 
 }
 
-struct ListNode* checkFreeListForBlock(const int size) {
+ListNode *checkFreeListForBlock(const int size) {
     // If the freelist is empty return nullptr
-    if (*starting_place.head == 0){return 0;}
+    if (heap_header.head == 0){return 0;}
     // For every node in the freelist
-    for (struct ListNode node = starting_place.head; node.next != 0; node = *node.next) {
+    for (ListNode node = *heap_header.head; node.next != 0; node = *node.next) {
         // If the block size (the flagless value at the preceding address) is greater than the given size
-        // Flags can matters in case the sizes are equal (even though the free flag is 0)
-        if (flaglessSize(*(&node - word_size)) >= size) {
+        // Flags can matter in case the sizes are equal (even though the free flag is 0)
+        if (flaglessSize(*(int *)(&node - word_size)) >= size) {
             // Return the address of the node (which is the start of the free block)
             return &node;
         }
@@ -121,19 +125,19 @@ struct ListNode* checkFreeListForBlock(const int size) {
 
 
 // region Utility Functions
-struct BlockInfo verifyBlock(int *address_of_usable_memory) {
+BlockInfo verifyBlock(void *address_of_usable_memory) {
     // Get the address of the header (address right before this address)
     int *start = address_of_usable_memory - word_size;
     //  and values of the header
-    int size = flaglessSize(start);
-    int flag = readFlag(start);
+    const int size = flaglessSize(*start);
+    const int flag = readFlag(*start);
     // Get address of footer
     int *end = address_of_usable_memory + size;
-    if (start != end || size < minimum_alloc || end > max || start > end) {
+    if (start != end || size < minimum_alloc || *end > max || start > end) {
         // This is how I am returning invalid blocks
-        return (struct BlockInfo){.start=0, .end=0, .size=0, .flag=0};
+        return (BlockInfo){.start=0, .end=0, .size=0, .flag=0};
     }
-    return (struct BlockInfo){.start=start, .end=end, .size=size, .flag=flag};
+    return (BlockInfo){.start=start, .end=end, .size=size, .flag=flag};
 }
 
 //endregion
@@ -141,7 +145,7 @@ struct BlockInfo verifyBlock(int *address_of_usable_memory) {
 
 // region Allocation Stuff
 
-struct TwoAddresses create_footer_and_header(int *headerStart, const int size, const int flag) {
+TwoAddresses create_footer_and_header(int *headerStart, const int size, const int flag) {
     // Create header and footer
     // Return the size
 
@@ -152,34 +156,41 @@ struct TwoAddresses create_footer_and_header(int *headerStart, const int size, c
     int *end = headerStart + word_size + size;
     *end = size + flag;
 
-    const struct TwoAddresses result = {headerStart,end};
+    const TwoAddresses result = {headerStart,end};
     return result;
 }
 
-void splitBlock(struct ListNode* startAddressOfUsableMemory, int size) {
-    // Get initial block sizes
-    const int initialBlockSize = flaglessSize(startAddressOfUsableMemory - word_size);
-    int block2Size = initialBlockSize - size;
-    if (block2Size + (2 * word_size) < minimum_valid_block_size) {
-        size += block2Size;
-        block2Size = 0;
+void splitBlock(ListNode* startAddressOfUsableMemory, int size) {
+    // Done: Refactor split to split from the bottom to not have to do a freelist manipulation
+
+    // Define initial parameters:
+    BlockInfo initial_block_info = verifyBlock(startAddressOfUsableMemory);
+    // int initialBlockEnd = flaglessSize(*(int *)((char *)startAddressOfUsableMemory + initialBlockSize));
+    int free_block_size = initial_block_info.size - size;
+    if (free_block_size + (2 * word_size) < minimum_valid_block_size) {
+        // size = size + free_block_size;
+        free_block_size = 0;
     }
+    // int *activeBlockEnd = initial_block_info.end;
 
+    // If the whole block is being allotted just remove it from free list and rewrite as active
+    if (free_block_size == 0) {
+        removeBlockFromFreeList(startAddressOfUsableMemory);
+        writeFlag(initial_block_info.start, active);
+        writeFlag(initial_block_info.end, active);
+        return;
+    }
+    // If not define the active block and create it
+    int *activeBlockStart = initial_block_info.end - size;
+    create_footer_and_header(activeBlockStart, size, active);
 
-    // Initialize addresses for the new block's headers and footers
-    // (everytime I initialize addresses the IDE yells at me, so I don't even know how to type them anymore)
+    // Then define the free block and create it
+    int *free_block_start = initial_block_info.start;
+    create_footer_and_header(free_block_start, free_block_size, inactive);
 
-    block1Start = &startAddressOfUsableMemory - word_size;
-    block1End = &startAddressOfUsableMemory + size;
+    // Since I made the upper memory the free memory no need to manipulate free block entries since they already exist
 
-    block2Start = block1End + word_size;
-    block2End = block2Start + block2Size;
-
-    removeBlockFromFreeList(*startAddressOfUsableMemory);
-    create_footer_and_header(block1Start, size, active);
-    if (block2Size == 0){return;}
-    create_footer_and_header(block2Start, block2Size, inactive);
-    addBlockToFreeList(block2Start + word_size);
+    // addBlockToFreeList(free_block_start + word_size);
 
 }
 
@@ -205,10 +216,10 @@ int adjustToNearestValidSize(const int size) {
 
 }
 
-int allocate(int size) {
+void *allocate(int size) {
     // if (~sizeIsValid(size)){return 0;}
     size = adjustToNearestValidSize(size);
-    struct ListNode* nodeOfFreeGuy = checkFreeListForBlock(size);
+    ListNode *nodeOfFreeGuy = checkFreeListForBlock(size);
     if (nodeOfFreeGuy == 0){return 0;}
     splitBlock(nodeOfFreeGuy, size);
     // Return the address (since the address of the )
@@ -219,77 +230,83 @@ int allocate(int size) {
 
 
 // region Free Stuff
-bool blockIsInvalid(const struct BlockInfo block_to_free) {
+bool blockIsInvalid(const BlockInfo block) {
     // This is the definition of an incorrect block
-    if (block_to_free.start == 0 && block_to_free.end == 0) {
+    if (block.start == 0 && block.end == 0) {
         return true;
     }
     return false;
 }
 
-void coalesce(struct BlockInfo freed_block, struct BlockInfo previous_block, struct BlockInfo next_block) {
+bool blockIsValid(const BlockInfo block_to_free) {
+    return !blockIsInvalid(block_to_free);
+}
+
+void double_coalesce(BlockInfo freed_block, BlockInfo previous_block, BlockInfo next_block) {
+    int size = &next_block.end - &previous_block.start;
+    removeBlockFromFreeList((ListNode *)(next_block.start + word_size));
+    *previous_block.start = size;
+    *previous_block.end = 0;
+    *freed_block.start = 0;
+    *freed_block.end = 0;
+    *next_block.start = 0;
+    *next_block.end = size;
+    // Freelist entry already exists
+    // addBlockToFreeList(&previous_block.start + word_size);
+}
+void lower_coalesce(BlockInfo freed_block, BlockInfo next_block) {
+    int size = &next_block.end - &freed_block.start;
+    removeBlockFromFreeList((ListNode *)(next_block.start + word_size));
+    *freed_block.start = size;
+    *freed_block.end = 0;
+    *next_block.start = 0;
+    *next_block.end = size;
+    addBlockToFreeList(&freed_block.start + word_size);
+
+}
+void upper_coalesce(BlockInfo freed_block, BlockInfo previous_block) {
+    int size = &freed_block.end - &previous_block.start;
+    // Freed block was never initially added to freelist just memset 0 and flag rewrites
+    // removeBlockFromFreeList((ListNode *)(next_block.start + word_size));
+    *previous_block.start = size;
+    *previous_block.end = 0;
+    *freed_block.start = 0;
+    *freed_block.end = size;
+    //Entry on previous block already exists
+    // addBlockToFreeList(&previous_block.start + word_size);
+}
+void coalesce(BlockInfo freed_block, BlockInfo previous_block, BlockInfo next_block) {
+    // Add conditions for if there is no previous or next block due to it being first or last
     if (next_block.flag == active && previous_block.flag == active) {
-        // Rewrite from active to inactive because the block starts with the freed block's header
-        // Rewrite from active to inactive because the block ends with the freed block's footer
-        writeFlag(freed_block.start, inactive);
-        writeFlag(freed_block.end, inactive);
+        addBlockToFreeList(&freed_block.start + word_size);
         return;
     }
-
-    int size;
-    int array_size;
-    int *address_array[6];
-
-    if (next_block.flag == inactive && previous_block.flag == inactive) {
-        // No flag rewriting because the freed block's header and footer will be deleted
-        size = previous_block.size + freed_block.size + next_block.size;
-        array_size = 6;
-        address_array = {previous_block.start, previous_block.end, freed_block.start, freed_block.end, next_block.start, next_block.end};
-
-        // Arg is supposed to be address where ListNode is (address one ptr size after headers)
-
-        // Because the freelist node of the previous block is already at the correct place then all we need to do is
-        // remove the next_block's node
-        removeBlockFromFreeList(*(next_block.start + word_size)); // Supposed to call on address where the ListNode would be
+    if (blockIsInvalid(previous_block) && blockIsInvalid(next_block)) {
+        addBlockToFreeList(&freed_block.start + word_size);
+        return;
     }
-
-    else if (next_block.flag == inactive) {
-        // Rewrite from active to inactive because the block starts with the freed block's header
-        writeFlag(freed_block.start, inactive);
-        size = freed_block.size + next_block.size;
-        array_size = 4;
-        address_array = {freed_block.start, freed_block.end, next_block.start, next_block.end, 0 , 0};
-
-        // Arg is supposed to be address where ListNode is (address one ptr size after headers)
-
-        // Here we need to move the node from the next_block to the freed_block to coalesce
-        removeBlockFromFreeList(*(next_block.start + word_size));
-        addBlockToFreeList(*(freed_block.start + word_size));
+    if (next_block.flag == inactive && previous_block.flag == inactive && blockIsValid(next_block) && blockIsValid(previous_block)) {
+        double_coalesce(freed_block, previous_block, next_block);
+        return;
     }
-    else {
-        // Rewrite from active to inactive because the block ends with the freed block's footer
-        writeFlag(freed_block.end, inactive);
-        size = freed_block.size + previous_block.size;
-        array_size = 4;
-        address_array = {previous_block.start, previous_block.end, freed_block.start, freed_block.end, 0, 0};
-        // Here because there is no next no node maintenance needs to occur since the node (prev_block) is already at the correct spot
+    if (next_block.flag == inactive && (previous_block.flag == active || blockIsInvalid(previous_block))) {
+        lower_coalesce(freed_block, next_block);
+        return;
     }
-
-    for (int index = 0; index < array_size; index++) {
-        int *current_address = address_array[index];
-
-        // The new header and footer will be the first and last item in the array
-        if (index == 0 || index + 1 == array_size) {
-            *current_address = size; // + inactive; Inactive is 0 so no need to add flag atm
-        }
-        else {
-            // Delete the former headers and footers
-            *current_address = 0;
-        }
+    if ((next_block.flag == active || blockIsInvalid(next_block)) && previous_block.flag == inactive) {
+        upper_coalesce(freed_block, previous_block);
+        // return;
     }
 }
 
-bool free_address(int *address_of_usable_memory) {
+void clean_freed_address(void *address_of_usable_memory, BlockInfo freed_block) {
+    writeFlag(freed_block.start, inactive);
+    writeFlag(freed_block.end, inactive);
+    // Delete memory that was previously there for security concerns
+    memset(address_of_usable_memory, 0, flaglessSize(freed_block.size));
+}
+
+bool free_address(void *address_of_usable_memory) {
     /* Detect which adjacent blocks are empty
      * If next is empty delete it from the free list
      * If last is not empty add current to free list
@@ -297,13 +314,13 @@ bool free_address(int *address_of_usable_memory) {
      * delete all headers
      * write where new headers are supposed to be
     */
-    const struct BlockInfo block_to_free = verifyBlock(address_of_usable_memory);
+    const BlockInfo block_to_free = verifyBlock(address_of_usable_memory);
     if (blockIsInvalid(block_to_free)){return false;}
     if (block_to_free.flag == inactive){return false;}
-    // TODO IF IT IS THE FIRST OR LAST BLOCK THERE IS NO PREV OR NEXT (Factor this in accordingly check that I check for it)
-    const struct BlockInfo previous_block = verifyBlock(block_to_free.start - word_size);
-    const struct BlockInfo next_block = verifyBlock(block_to_free.end + word_size);
-    // if (blockIsInvalid(previous_block) || blockIsInvalid(next_block)){return false;}
+    // DONE: IF IT IS THE FIRST OR LAST BLOCK THERE IS NO PREV OR NEXT (Factor this in accordingly check that I check for it)
+    const BlockInfo previous_block = verifyBlock(block_to_free.start - word_size);
+    const BlockInfo next_block = verifyBlock(block_to_free.end + word_size);
+    clean_freed_address(address_of_usable_memory, block_to_free);
     coalesce(block_to_free, previous_block, next_block);
     return true;
     // if (blockIsInvalid(block_to_free)){return false;}
@@ -313,26 +330,22 @@ bool free_address(int *address_of_usable_memory) {
 
 
 // region System wide funcs
+// DONE: Rewrite given the fact that HeapHeader was moved to BSS
 void initializeHeap() {
-    // Create Heap Header at the address starting place
-    *starting_place = (struct HeapHeader){.head = 0, .tail = 0};
-    const int header_size = sizeof(struct HeapHeader);
-    // The size of the initial block must take into account the header-size and the size of a footer afterwards
-    // because of how the function is implemented
-    const struct TwoAddresses initialBlock = create_footer_and_header(header_size, max - header_size - word_size, inactive);
+    create_footer_and_header(0, max - word_size, inactive);
     // Define the address where the usable memory block starts (bc above func returns ptr to header)
-    int *memory_start = initialBlock.a + word_size;
+    void *memory_start = (char *)0 + word_size;
     // Since we initialize this as a free block we include it in the free list
-    *memory_start = (struct ListNode){*starting_place, 0, 0};
-    *starting_place.head = memory_start;
+    *(ListNode *)memory_start = (ListNode){0, 0};
+    heap_header.head = memory_start;
 }
-
+typedef struct BoolAndCount BoolAndCount;
 struct BoolAndCount {
     bool bool_value;
     int count_or_address;
 };
 
-struct BoolAndCount verifyHeapIntegrity() {
+BoolAndCount verifyHeapIntegrity() {
     /* Walk Free List
      * Verify one block at a time
      */
@@ -343,19 +356,27 @@ struct BoolAndCount verifyHeapIntegrity() {
     int count_free_blocks = 0;
     for (
         // The size of HeapHeader + 1 address (first block header) will give you the start of the usable memory there
-        struct BlockInfo current_block = verifyBlock(starting_place + sizeof(struct HeapHeader) + word_size);
+
+        // Done: Rewrite given the fact that HeapHeader was moved to BSS
+        // START CONDITION
+        BlockInfo current_block = verifyBlock((char *)0 + word_size);
         // The address where the last block ends should always be the last data in general, as such accessing the
         // "start" of the last address + its size should == the maximum space
-        current_block.end + word_size == max;
-        current_block = verifyBlock(current_block.end + 2*word_size)) {
+
+        // END CONDITION
+        (char *) current_block.end + word_size == (void *) max;
+
+        // ITERATOR
+        current_block = verifyBlock(current_block.end + 2*word_size)){
+
         if (blockIsInvalid(current_block)) {
-            return (struct BoolAndCount){false, current_block.start + word_size};
+            return (BoolAndCount){false, *current_block.start + word_size};
         }
         if (current_block.flag == inactive) {
             count_free_blocks++;
         }
     }
-    return (struct BoolAndCount){true, count_free_blocks};
+    return (BoolAndCount){true, count_free_blocks};
 }
 
 bool verifyFreeList(const int free_list_count) {
@@ -366,32 +387,32 @@ bool verifyFreeList(const int free_list_count) {
     // Will return False if the free list is invalid (and true if it is valid)
 
     int list_cnt = 0;
-    struct ListNode last_node = (struct ListNode){0, 0, 0};
-    for (struct ListNode current_node = *starting_place.head; current_node.next == 0; current_node = *current_node.next) {
+    const ListNode *last_node = &(struct ListNode){0, 0};
+    for (ListNode current_node = *heap_header.head; current_node.next == 0; current_node = *current_node.next) {
         list_cnt++;
-        last_node = current_node;
-        if (current_node.header != starting_place) {
-            return false;
-        }
+        last_node = &current_node;
+        // if (current_node.header != starting_place) {
+        //     return false;
+        // }
     }
     if (free_list_count != list_cnt) {
         return false;
     }
-    if (last_node.header == 0 && list_cnt == 0) {
+    if (last_node->next == 0 && last_node->prev == 0 && list_cnt == 0) {
         return true;
     }
-    if (last_node != *starting_place.tail) {
+    if (last_node != heap_header.tail) {
         return false;
     }
     return true;
 }
 
-struct BoolAndCount verify() {
-    const struct BoolAndCount heapIntegrityResult = verifyHeapIntegrity();
+BoolAndCount verify() {
+    const BoolAndCount heapIntegrityResult = verifyHeapIntegrity();
     if (~heapIntegrityResult.bool_value){return heapIntegrityResult;}
     bool const freeListResult = verifyFreeList(heapIntegrityResult.count_or_address);
     // If FreeList is invalid this will return False and the lack of an address will indicate it's a Free list error
-    return (struct BoolAndCount){freeListResult, 0};
+    return (BoolAndCount){freeListResult, 0};
 
 }
 
