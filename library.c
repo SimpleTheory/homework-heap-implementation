@@ -1,6 +1,7 @@
 #include "library.h"
 // #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 // region Params and Struct Defs
 
@@ -47,7 +48,9 @@ const int minimum_alloc = word_size * 3;
 HeapHeader heap_header = (struct HeapHeader){.head = 0, .tail = 0};
 const int max = 4096;
 const int minimum_valid_block_size = word_size * 5;
-const void *init_start_of_user_memory = (char *)0 + word_size;
+
+char *memory_start = 0;
+char *memory_end = 0;
 
 //endregion
 
@@ -111,12 +114,15 @@ ListNode *checkFreeListForBlock(const int size) {
     // If the freelist is empty return nullptr
     if (heap_header.head == 0){return 0;}
     // For every node in the freelist
-    for (ListNode node = *heap_header.head; node.next != 0; node = *node.next) {
+
+    // [SRM3] Use pointers (to ListNode) here, not ListNode's, themselves.
+
+    for (ListNode *node = heap_header.head; node->next != 0; node = node->next) {
         // If the block size (the flagless value at the preceding address) is greater than the given size
         // Flags can matter in case the sizes are equal (even though the free flag is 0)
-        if (flaglessSize(*(int *)(&node - word_size)) >= size) {
+        if (flaglessSize(*(int *)((char *) node - word_size)) >= size) {
             // Return the address of the node (which is the start of the free block)
-            return &node;
+            return node;
         }
     }
     return 0;
@@ -127,13 +133,13 @@ ListNode *checkFreeListForBlock(const int size) {
 // region Utility Functions
 BlockInfo verifyBlock(void *address_of_usable_memory) {
     // Get the address of the header (address right before this address)
-    int *start = address_of_usable_memory - word_size;
+    int *start = (int *) ((char *) address_of_usable_memory - word_size);
     //  and values of the header
     const int size = flaglessSize(*start);
     const int flag = readFlag(*start);
     // Get address of footer
-    int *end = address_of_usable_memory + size;
-    if (start != end || size < minimum_alloc || *end > max || start > end) {
+    int *end = (int *) ((char *) address_of_usable_memory + size);
+    if (*start != *end || size < minimum_alloc || (char *) end > memory_end || start > end) {
         // This is how I am returning invalid blocks
         return (BlockInfo){.start=0, .end=0, .size=0, .flag=0};
     }
@@ -223,7 +229,10 @@ void *allocate(int size) {
     if (nodeOfFreeGuy == 0){return 0;}
     splitBlock(nodeOfFreeGuy, size);
     // Return the address (since the address of the )
-    return &nodeOfFreeGuy;
+
+    // [SRM3] nodeOfFreeGuy is a pointer; return that value, rather than the address of the pointer!
+
+    return (void *) nodeOfFreeGuy;
 }
 
 //endregion
@@ -332,12 +341,16 @@ bool free_address(void *address_of_usable_memory) {
 // region System wide funcs
 // DONE: Rewrite given the fact that HeapHeader was moved to BSS
 void initializeHeap() {
-    create_footer_and_header(0, max - word_size, inactive);
+    memory_start = sbrk(max);
+    memory_end = memory_start + max;
+
+    create_footer_and_header((int *) memory_start, max - word_size, inactive);
     // Define the address where the usable memory block starts (bc above func returns ptr to header)
-    void *memory_start = (char *)0 + word_size;
+
     // Since we initialize this as a free block we include it in the free list
-    *(ListNode *)memory_start = (ListNode){0, 0};
-    heap_header.head = memory_start;
+    *(ListNode *)(memory_start + word_size) = (ListNode){0, 0};
+
+    heap_header.head = heap_header.tail = (ListNode *)(memory_start + word_size);
 }
 typedef struct BoolAndCount BoolAndCount;
 struct BoolAndCount {
@@ -355,20 +368,28 @@ BoolAndCount verifyHeapIntegrity() {
 
     int count_free_blocks = 0;
     for (
-        // The size of HeapHeader + 1 address (first block header) will give you the start of the usable memory there
+	 // The size of HeapHeader + 1 address (first block header)
+	 // will give you the start of the usable memory there
 
-        // Done: Rewrite given the fact that HeapHeader was moved to BSS
-        // START CONDITION
-        BlockInfo current_block = verifyBlock((char *)0 + word_size);
-        // The address where the last block ends should always be the last data in general, as such accessing the
-        // "start" of the last address + its size should == the maximum space
+	 // Done: Rewrite given the fact that HeapHeader was moved to BSS
+	 // START CONDITION
+	 BlockInfo current_block = verifyBlock(memory_start + word_size);
 
-        // END CONDITION
-        (char *) current_block.end + word_size == (void *) max;
+	 // The address where the last block ends should always be the
+	 // last data in general, as such accessing the "start" of the
+	 // last address + its size should == the maximum space
 
-        // ITERATOR
-        current_block = verifyBlock(current_block.end + 2*word_size)){
+	 // END CONDITION
 
+	 // [SRM3] This condition isn't being used to make any choices,
+	 // so what are you intending?
+
+	 (char *) current_block.end + word_size == memory_end;
+
+	 // ITERATOR
+	 current_block = verifyBlock(current_block.end + 2 * word_size)
+        )
+    {
         if (blockIsInvalid(current_block)) {
             return (BoolAndCount){false, *current_block.start + word_size};
         }
